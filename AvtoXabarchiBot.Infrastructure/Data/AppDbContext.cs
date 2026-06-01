@@ -45,7 +45,7 @@ public class AppDbContext : DbContext
 			entity.HasKey(e => e.Id);
 			entity.HasIndex(e => e.Status);
 			entity.HasIndex(e => e.NextSendAt);
-			// SQL Server: User va Account orqali ikki cascade yo'li bo'lmasin
+			// User va Account orqali ikki cascade yo'li bo'lmasin
 			entity.HasOne(e => e.User)
 				  .WithMany(u => u.Messages)
 				  .HasForeignKey(e => e.UserId)
