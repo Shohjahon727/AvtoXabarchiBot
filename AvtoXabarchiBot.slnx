@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="AvtoXabarchiBot.Core/AvtoXabarchiBot.Core.csproj" />
+  <Project Path="AvtoXabarchiBot.Infrastructure/AvtoXabarchiBot.Infrastructure.csproj" />
+  <Project Path="AvtoXabarchiBot.Web/AvtoXabarchiBot.Web.csproj" />
+</Solution>

@@ -1,0 +1,6 @@
+@AvtoXabarchiBot.Web_HostAddress = http://localhost:5281
+
+GET {{AvtoXabarchiBot.Web_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
