@@ -2,7 +2,6 @@ using AvtoXabarchiBot.Infrastructure.Data;
 using AvtoXabarchiBot.Infrastructure.Services;
 using AvtoXabarchiBot.Web.Services;
 using Hangfire;
-using Hangfire.PostgreSql;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
@@ -21,13 +20,13 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 	?? throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
 
 builder.Services.AddDbContext<AppDbContext>(options =>
-	options.UseNpgsql(connectionString));
+	options.UseSqlServer(connectionString));
 
 builder.Services.AddHangfire(config => config
 	.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
 	.UseSimpleAssemblyNameTypeSerializer()
 	.UseRecommendedSerializerSettings()
-	.UsePostgreSqlStorage(options => options.UseNpgsqlConnection(connectionString)));
+	.UseSqlServerStorage(connectionString));
 
 builder.Services.AddHangfireServer();
 
