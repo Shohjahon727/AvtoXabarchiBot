@@ -148,8 +148,11 @@ public class TelegramAccountClientPool : IDisposable
 	private SemaphoreSlim GetLock(long accountId) =>
 		_locks.GetOrAdd(accountId, _ => new SemaphoreSlim(1, 1));
 
-	private static string ResolveSessionPath(TelegramAccount account) =>
-		!string.IsNullOrWhiteSpace(account.SessionData)
+	private static string ResolveSessionPath(TelegramAccount account)
+	{
+		var path = !string.IsNullOrWhiteSpace(account.SessionData)
 			? account.SessionData
 			: TelegramSessionHelper.BuildSessionPath(account.UserId, account.PhoneNumber);
+		return TelegramSessionHelper.ResolveSessionPath(path);
+	}
 }

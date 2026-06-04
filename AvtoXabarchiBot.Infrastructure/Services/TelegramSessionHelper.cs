@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using AvtoXabarchiBot.Core.Models;
 using AvtoXabarchiBot.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
@@ -8,11 +9,44 @@ namespace AvtoXabarchiBot.Infrastructure.Services;
 
 public static class TelegramSessionHelper
 {
-	public static string BuildSessionPath(long userId, string phone) =>
-		$"sessions/user_{userId}_{NormalizePhone(phone)}.session";
+	public static string BuildSessionPath(long userId, string phone)
+	{
+		var sessionsDir = Path.Combine(AppContext.BaseDirectory, "sessions");
+		Directory.CreateDirectory(sessionsDir);
+		return Path.Combine(sessionsDir, $"user_{userId}_{NormalizePhone(phone)}.session");
+	}
+
+	public static string ResolveSessionPath(string sessionPath)
+	{
+		if (string.IsNullOrWhiteSpace(sessionPath))
+			return sessionPath;
+
+		return Path.IsPathRooted(sessionPath)
+			? Path.GetFullPath(sessionPath)
+			: Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, sessionPath));
+	}
 
 	public static string NormalizePhone(string phone) =>
 		new string(phone.Where(char.IsDigit).ToArray());
+
+	public static bool TryGetFloodWaitSeconds(Exception ex, out int seconds)
+	{
+		seconds = 0;
+		var text = ex is RpcException rpc ? rpc.Message : ex.Message;
+		var match = Regex.Match(text, @"FLOOD_WAIT_(\d+)", RegexOptions.IgnoreCase);
+		if (!match.Success || !int.TryParse(match.Groups[1].Value, out seconds))
+			return false;
+		return seconds > 0;
+	}
+
+	public static string FormatFloodWaitMessage(int seconds)
+	{
+		if (seconds < 60)
+			return $"⏳ Telegram vaqtincha cheklov qo‘ydi.\n\nIltimos, <b>{seconds} soniya</b> kutib, keyin qayta «Akkaunt qo'shish» ni bosing.";
+
+		var minutes = (int)Math.Ceiling(seconds / 60.0);
+		return $"⏳ Telegram juda ko‘p marta kod so‘ralgani uchun vaqtincha blokladi.\n\nIltimos, taxminan <b>{minutes} daqiqa</b> kuting (yangi kod so‘ramang), so‘ng qayta «Akkaunt qo'shish» ni bosing.";
+	}
 
 	public static bool IsSessionAuthError(Exception ex)
 	{

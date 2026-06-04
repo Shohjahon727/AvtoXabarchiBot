@@ -449,15 +449,28 @@ public class BotUpdateHandler
 		}
 
 		var session = _state.GetOrCreate(userId);
+
+		if (_clientStore.TryGetLoginClient(userId, out _))
+		{
+			session.PendingPhone = phone;
+			session.State = UserConversationState.WaitingLoginCode;
+			await bot.SendMessage(chatId,
+				"📲 Kod allaqachon yuborilgan. Telegram'dan kelgan kodni shu yerga yuboring (telefon raqam emas).",
+				replyMarkup: InlineCancel(),
+				cancellationToken: ct);
+			return;
+		}
+
 		session.PendingPhone = phone;
 		session.State = UserConversationState.WaitingLoginCode;
 
 		var client = _clientStore.GetOrAddLoginClient(userId, CreateClient);
 		var sessionPath = TelegramSessionHelper.BuildSessionPath(dbUser.Id, phone);
+		var phoneForLogin = phone.StartsWith('+') ? phone : "+" + phone;
 
 		try
 		{
-			var step = await client.BeginLoginAsync(phone, sessionPath, apiId, apiHash);
+			var step = await client.BeginLoginAsync(phoneForLogin, sessionPath, apiId, apiHash);
 			if (step == LoginStep.Failed)
 			{
 				await bot.SendMessage(chatId, "❌ Kod yuborib bo'lmadi. Qaytadan urinib ko'ring.", replyMarkup: MainMenu(), cancellationToken: ct);
@@ -465,21 +478,36 @@ public class BotUpdateHandler
 				return;
 			}
 
+			var delivery = client.LastCodeDeliveryHint ?? "Telegram ilovasida";
+			var whereToFind = delivery.Contains("SMS", StringComparison.OrdinalIgnoreCase)
+				? "📩 Kod <b>SMS</b> orqali kelishi kerak — telefon xabarlarini tekshiring."
+				: """
+				  📱 Kod <b>SMS emas</b> — <b>Telegram ilovangizga</b> yuborildi:
+				  • Telefonda <b>Telegram</b> ilovasini oching
+				  • <b>Telegram</b> (rasmiy chat) yoki «Login code» xabarini qidiring
+				  • Ba'zan: Sozlamalar → Qurilmalar → yangi kirish bildirishnomasi
+				  """;
+
 			await bot.SendMessage(chatId,
-				"""
+				$"""
 				📲 Kod yuborildi!
 
-				Telegram akkauntingizga tasdiqlash kodi yuborildi.
+				{whereToFind}
 
-				⚠️ <b>MUHIM:</b> Telegram xavfsizlik siyosati sababli kodni <b>STANDART BO'LMAGAN</b> formatda yuboring:
-
-				• <code>123.45</code> (nuqta bilan)
-				• <code>12 34 5</code> (bo'sh joy bilan)
-				• <code>1-2-3-4-5</code> (chiziqcha bilan)
+				✅ Topgan kodingizni shu yerga yuboring (masalan: <code>61544</code>).
+				⚠️ Telefon raqam yubormang. 1–2 daqiqa ichida kiriting.
 				""",
 				parseMode: ParseMode.Html,
 				replyMarkup: InlineCancel(),
 				cancellationToken: ct);
+		}
+		catch (Exception ex) when (TelegramSessionHelper.TryGetFloodWaitSeconds(ex, out var floodSeconds))
+		{
+			_logger.LogWarning(ex, "FLOOD_WAIT {Seconds}s. UserId={UserId}", floodSeconds, userId);
+			_state.Reset(userId);
+			_clientStore.RemoveLoginClient(userId);
+			await bot.SendMessage(chatId, TelegramSessionHelper.FormatFloodWaitMessage(floodSeconds),
+				parseMode: ParseMode.Html, replyMarkup: MainMenu(), cancellationToken: ct);
 		}
 		catch (Exception ex)
 		{
@@ -493,14 +521,20 @@ public class BotUpdateHandler
 	private async Task ProcessLoginCodeAsync(ITelegramBotClient bot, long chatId, long userId, BotUser dbUser, string text, CancellationToken ct)
 	{
 		var session = _state.GetOrCreate(userId);
-		if (!_clientStore.TryGetLoginClient(userId, out var client) && session.PendingPhone == null)
+		if (!_clientStore.TryGetLoginClient(userId, out var client) || client is null)
 		{
 			await bot.SendMessage(chatId, "Sessiya topilmadi. Qaytadan akkaunt qo'shing.", replyMarkup: MainMenu(), cancellationToken: ct);
 			_state.Reset(userId);
 			return;
 		}
 
-		client ??= _clientStore.GetOrAddLoginClient(userId, CreateClient);
+		if (session.PendingPhone == null)
+		{
+			await bot.SendMessage(chatId, "Sessiya topilmadi. Qaytadan akkaunt qo'shing.", replyMarkup: MainMenu(), cancellationToken: ct);
+			_state.Reset(userId);
+			_clientStore.RemoveLoginClient(userId);
+			return;
+		}
 
 		try
 		{
@@ -523,11 +557,25 @@ public class BotUpdateHandler
 
 			if (step != LoginStep.Completed)
 			{
-				await bot.SendMessage(chatId, "❌ Kod noto'g'ri. Qaytadan yuboring.", replyMarkup: InlineCancel(), cancellationToken: ct);
+				await bot.SendMessage(chatId,
+					"❌ Kod noto'g'ri.\n\nTelegram'dan kelgan 4–8 xonali kodni yuboring (telefon raqam emas).",
+					replyMarkup: InlineCancel(),
+					cancellationToken: ct);
 				return;
 			}
 
 			await CompleteAccountLinkAsync(bot, chatId, userId, dbUser, session.PendingPhone!, client, used2Fa: false, ct);
+		}
+		catch (TL.RpcException rpcEx) when (rpcEx.Code == 400 &&
+		                                     rpcEx.Message.Contains("PHONE_CODE_EXPIRED", StringComparison.OrdinalIgnoreCase))
+		{
+			_logger.LogWarning(rpcEx, "PHONE_CODE_EXPIRED. UserId={UserId}", userId);
+			_clientStore.RemoveLoginClient(userId);
+			_state.Reset(userId);
+			await bot.SendMessage(chatId,
+				"⚠️ Kod muddati tugagan yoki eski kod ishlatildi.\n\n➕ Akkaunt qo'shishdan qaytadan boshlang va yangi kod oling.",
+				replyMarkup: MainMenu(),
+				cancellationToken: ct);
 		}
 		catch (Exception ex)
 		{
@@ -539,7 +587,20 @@ public class BotUpdateHandler
 	private async Task Process2FAAsync(ITelegramBotClient bot, long chatId, long userId, BotUser dbUser, string text, CancellationToken ct)
 	{
 		var session = _state.GetOrCreate(userId);
-		var client = _clientStore.GetOrAddLoginClient(userId, CreateClient);
+		if (!_clientStore.TryGetLoginClient(userId, out var client) || client is null)
+		{
+			await bot.SendMessage(chatId, "Sessiya topilmadi. Qaytadan akkaunt qo'shing.", replyMarkup: MainMenu(), cancellationToken: ct);
+			_state.Reset(userId);
+			return;
+		}
+
+		if (session.PendingPhone == null)
+		{
+			await bot.SendMessage(chatId, "Sessiya topilmadi. Qaytadan akkaunt qo'shing.", replyMarkup: MainMenu(), cancellationToken: ct);
+			_state.Reset(userId);
+			_clientStore.RemoveLoginClient(userId);
+			return;
+		}
 
 		try
 		{

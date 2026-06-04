@@ -2,12 +2,16 @@ using AvtoXabarchiBot.Infrastructure.Data;
 using AvtoXabarchiBot.Infrastructure.Services;
 using AvtoXabarchiBot.Web.Services;
 using Hangfire;
+using Hangfire.SqlServer;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
 Log.Logger = new LoggerConfiguration()
+	.MinimumLevel.Information()
+	.WriteTo.Console()
 	.ReadFrom.Configuration(builder.Configuration)
 	.CreateLogger();
 builder.Host.UseSerilog();
@@ -26,7 +30,10 @@ builder.Services.AddHangfire(config => config
 	.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
 	.UseSimpleAssemblyNameTypeSerializer()
 	.UseRecommendedSerializerSettings()
-	.UseSqlServerStorage(connectionString));
+	.UseSqlServerStorage(connectionString, new SqlServerStorageOptions
+	{
+		PrepareSchemaIfNecessary = true
+	}));
 
 builder.Services.AddHangfireServer();
 
@@ -56,6 +63,12 @@ using (var scope = app.Services.CreateScope())
 {
 	var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 	db.Database.Migrate();
+}
+
+await using (var sql = new SqlConnection(connectionString))
+{
+	await sql.OpenAsync();
+	SqlServerObjectsInstaller.Install(sql);
 }
 
 RecurringJob.AddOrUpdate<MessageDispatchService>(

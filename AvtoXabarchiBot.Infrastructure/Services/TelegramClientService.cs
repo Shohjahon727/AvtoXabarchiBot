@@ -15,6 +15,9 @@ public class TelegramClientService : ITelegramClientService, IDisposable
 
 	public bool IsAuthenticated => _client?.User != null && !_disposed;
 
+	/// <summary>So'nggi Auth_SendCode qayerga yuborilgani (masalan, Telegram ilovasi).</summary>
+	public string? LastCodeDeliveryHint { get; private set; }
+
 	public TelegramClientService(ILogger<TelegramClientService>? logger = null)
 	{
 		_logger = logger;
@@ -29,8 +32,24 @@ public class TelegramClientService : ITelegramClientService, IDisposable
 		_client = new Client(Config);
 		_sessionPath = sessionPath;
 
-		var next = await _client.Login(phoneNumber);
-		return MapLoginStep(next);
+		LastCodeDeliveryHint = null;
+		Task OnOtherHandler(IObject obj)
+		{
+			if (obj is Auth_SentCode sent)
+				LastCodeDeliveryHint = DescribeSentCodeType(sent);
+			return Task.CompletedTask;
+		}
+
+		_client.OnOther += OnOtherHandler;
+		try
+		{
+			var next = await _client.Login(phoneNumber);
+			return MapLoginStep(next);
+		}
+		finally
+		{
+			_client.OnOther -= OnOtherHandler;
+		}
 	}
 
 	public async Task<LoginStep> SubmitCodeAsync(string code)
@@ -38,7 +57,7 @@ public class TelegramClientService : ITelegramClientService, IDisposable
 		if (_client == null) return LoginStep.Failed;
 
 		var digits = new string(code.Where(char.IsDigit).ToArray());
-		if (digits.Length < 4) return LoginStep.Failed;
+		if (digits.Length is < 4 or > 8) return LoginStep.Failed;
 
 		var next = await _client.Login(digits);
 		return MapLoginStep(next);
@@ -228,7 +247,7 @@ public class TelegramClientService : ITelegramClientService, IDisposable
 
 	private void PrepareConfig(int apiId, string apiHash, string sessionPath)
 	{
-		var fullPath = Path.GetFullPath(sessionPath);
+		var fullPath = TelegramSessionHelper.ResolveSessionPath(sessionPath);
 		var dir = Path.GetDirectoryName(fullPath);
 		if (!string.IsNullOrEmpty(dir))
 			Directory.CreateDirectory(dir);
@@ -238,6 +257,17 @@ public class TelegramClientService : ITelegramClientService, IDisposable
 		_config["session_pathname"] = fullPath;
 		_config.Remove("verification_code");
 		_config.Remove("password");
+	}
+
+	private static string DescribeSentCodeType(Auth_SentCode sent)
+	{
+		var name = sent.type?.GetType().Name ?? "";
+		if (name.Contains("App", StringComparison.OrdinalIgnoreCase)) return "Telegram ilovasida";
+		if (name.Contains("Sms", StringComparison.OrdinalIgnoreCase)) return "SMS";
+		if (name.Contains("Call", StringComparison.OrdinalIgnoreCase)) return "telefon qo'ng'irog'i";
+		if (name.Contains("Fragment", StringComparison.OrdinalIgnoreCase)) return "Fragment SMS";
+		if (name.Contains("Firebase", StringComparison.OrdinalIgnoreCase)) return "mobil bildirishnoma";
+		return "Telegram";
 	}
 
 	private static LoginStep MapLoginStep(string? step) => step switch
